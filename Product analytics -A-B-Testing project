@@ -1,0 +1,427 @@
+
+## GitHub Project Structure
+
+```text
+product-analytics-ab-testing/
+│
+├── data/
+│   ├── user_sessions.csv
+│   ├── transactions.csv
+│   ├── marketing_channels.csv
+│   └── experiment_data.csv
+│
+├── sql/
+│   ├── schema.sql
+│   ├── funnel_analysis.sql
+│   ├── attribution_model.sql
+│   └── cohort_retention.sql
+│
+├── src/
+│   ├── sample_size_calculator.py
+│   ├── randomization.py
+│   ├── funnel_analysis.py
+│   ├── ab_test.py
+│   ├── attribution.py
+│   ├── cohort_analysis.py
+│   └── dashboard_data.py
+│
+├── dashboard/
+│   ├── Product_Analytics.pbix
+│   └── screenshots/
+│
+├── outputs/
+│   ├── experiment_results.csv
+│   ├── funnel_metrics.csv
+│   ├── attribution_results.csv
+│   └── cohort_retention.csv
+│
+├── notebooks/
+│   └── product_analytics.ipynb
+│
+├── requirements.txt
+├── main.py
+└── README.md
+```
+
+---
+
+# 1. Sample Size Calculator
+
+`sample_size_calculator.py`
+
+```python
+from statsmodels.stats.power import zt_ind_solve_power
+
+baseline_conversion = 0.10
+minimum_detectable_effect = 0.02
+
+effect_size = (
+    minimum_detectable_effect /
+    baseline_conversion
+)
+
+sample_size = zt_ind_solve_power(
+    effect_size=effect_size,
+    alpha=0.05,
+    power=0.80
+)
+
+print(
+    f"Required Sample Size Per Variant: "
+    f"{int(sample_size)}"
+)
+```
+
+---
+
+# 2. User Randomization
+
+`randomization.py`
+
+```python
+import pandas as pd
+import numpy as np
+
+df = pd.read_csv(
+    "data/user_sessions.csv"
+)
+
+np.random.seed(42)
+
+df["Variant"] = np.random.choice(
+    ["Control","Treatment"],
+    size=len(df)
+)
+
+df.to_csv(
+    "data/experiment_data.csv",
+    index=False
+)
+
+print("Users randomized")
+```
+
+---
+
+# 3. Funnel Analysis
+
+`funnel_analysis.py`
+
+```python
+import pandas as pd
+
+df = pd.read_csv(
+    "data/user_sessions.csv"
+)
+
+landing = len(
+    df[df["Stage"]=="Landing"]
+)
+
+product = len(
+    df[df["Stage"]=="Product"]
+)
+
+cart = len(
+    df[df["Stage"]=="Cart"]
+)
+
+payment = len(
+    df[df["Stage"]=="Payment"]
+)
+
+purchase = len(
+    df[df["Stage"]=="Purchase"]
+)
+
+funnel = pd.DataFrame({
+    "Stage":[
+        "Landing",
+        "Product",
+        "Cart",
+        "Payment",
+        "Purchase"
+    ],
+    "Users":[
+        landing,
+        product,
+        cart,
+        payment,
+        purchase
+    ]
+})
+
+funnel["Dropoff"] = (
+    1 -
+    funnel["Users"] /
+    funnel["Users"].shift(1)
+)
+
+funnel.to_csv(
+    "outputs/funnel_metrics.csv",
+    index=False
+)
+```
+
+---
+
+# 4. A/B Test Engine
+
+`ab_test.py`
+
+```python
+import pandas as pd
+
+from scipy.stats import chi2_contingency
+
+df = pd.read_csv(
+    "data/experiment_data.csv"
+)
+
+table = pd.crosstab(
+    df["Variant"],
+    df["Converted"]
+)
+
+chi2,p,dof,expected = (
+    chi2_contingency(table)
+)
+
+print(f"P Value: {p}")
+
+if p < 0.05:
+    print(
+        "Statistically Significant"
+    )
+else:
+    print(
+        "Not Significant"
+    )
+```
+
+---
+
+# 5. SQL Funnel Analysis
+
+`funnel_analysis.sql`
+
+```sql
+SELECT
+Stage,
+COUNT(DISTINCT UserID) Users
+
+FROM user_sessions
+
+GROUP BY Stage;
+```
+
+---
+
+# 6. Multi-Touch Attribution
+
+`attribution.py`
+
+```python
+import pandas as pd
+
+df = pd.read_csv(
+    "data/marketing_channels.csv"
+)
+
+attribution = (
+    df.groupby("Channel")
+      ["Revenue"]
+      .sum()
+      .reset_index()
+)
+
+attribution["Contribution"] = (
+    attribution["Revenue"] /
+    attribution["Revenue"].sum()
+)
+
+attribution.to_csv(
+    "outputs/attribution_results.csv",
+    index=False
+)
+```
+
+---
+
+# 7. SQL Attribution Model
+
+`attribution_model.sql`
+
+```sql
+SELECT
+Channel,
+SUM(Revenue) Revenue
+
+FROM marketing_channels
+
+GROUP BY Channel
+
+ORDER BY Revenue DESC;
+```
+
+---
+
+# 8. Cohort Retention Analysis
+
+`cohort_analysis.py`
+
+```python
+import pandas as pd
+
+df = pd.read_csv(
+    "data/transactions.csv"
+)
+
+df["OrderDate"] = pd.to_datetime(
+    df["OrderDate"]
+)
+
+df["CohortMonth"] = (
+    df.groupby("UserID")
+      ["OrderDate"]
+      .transform("min")
+      .dt.to_period("M")
+)
+
+df["OrderMonth"] = (
+    df["OrderDate"]
+      .dt.to_period("M")
+)
+
+retention = pd.crosstab(
+    df["CohortMonth"],
+    df["OrderMonth"]
+)
+
+retention.to_csv(
+    "outputs/cohort_retention.csv"
+)
+```
+
+---
+
+# 9. SQL Cohort Retention
+
+`cohort_retention.sql`
+
+```sql
+WITH cohort AS
+(
+SELECT
+UserID,
+MIN(OrderDate) AS FirstOrder
+
+FROM transactions
+
+GROUP BY UserID
+)
+
+SELECT *
+FROM cohort;
+```
+
+---
+
+# 10. Dashboard Dataset Generation
+
+`dashboard_data.py`
+
+```python
+import pandas as pd
+
+funnel = pd.read_csv(
+    "outputs/funnel_metrics.csv"
+)
+
+attr = pd.read_csv(
+    "outputs/attribution_results.csv"
+)
+
+cohort = pd.read_csv(
+    "outputs/cohort_retention.csv"
+)
+
+dashboard = {
+    "Funnel": funnel,
+    "Attribution": attr,
+    "Cohort": cohort
+}
+
+print(
+    "Dashboard datasets ready"
+)
+```
+
+---
+
+# 11. Main Pipeline
+
+`main.py`
+
+```python
+import subprocess
+
+steps = [
+    "src/randomization.py",
+    "src/funnel_analysis.py",
+    "src/ab_test.py",
+    "src/attribution.py",
+    "src/cohort_analysis.py",
+    "src/dashboard_data.py"
+]
+
+for step in steps:
+    subprocess.run(
+        ["python", step]
+    )
+
+print(
+    "Analytics Pipeline Complete"
+)
+```
+
+---
+
+# Power BI Dashboard Pages
+
+### Executive Overview
+
+* Total Users
+* Conversion Rate
+* Revenue
+* A/B Test Winner
+* Statistical Significance
+
+### Funnel Analytics
+
+* Funnel Conversion
+* Drop-off %
+* Stage Performance
+
+### Experiment Dashboard
+
+* Control vs Treatment
+* Uplift %
+* Confidence Level
+* P-value
+
+### Attribution Dashboard
+
+* First Touch Attribution
+* Last Touch Attribution
+* Multi-Touch Attribution
+* Revenue Contribution
+
+### Cohort Analysis
+
+* Retention Heatmap
+* Monthly Cohorts
+* Retention Trends
+
+---
+
